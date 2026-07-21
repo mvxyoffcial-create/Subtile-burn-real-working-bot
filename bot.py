@@ -9,7 +9,7 @@ from pyrogram.types import Message
 # Credentials
 API_ID = 36282056 
 API_HASH = "3a948acece533f362b4c90b2b3c14b60"
-BOT_TOKEN = "8737705568:AAGSjZlCgT6yrs6h045X88EEq63-iZLCiD4"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "8000"))
 
 app = Client("hardsub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
