@@ -9,14 +9,16 @@ from pyrogram.types import Message
 API_ID = 36282056 
 API_HASH = "3a948acece533f362b4c90b2b3c14b60"
 BOT_TOKEN = "8737705568:AAGSjZlCgT6yrs6h045X88EEq63-iZLCiD4"
-PORT = int(os.getenv("PORT", "8080"))
+
+# Set default port to 8000 to match Koyeb's health check configuration
+PORT = int(os.getenv("PORT", "8000"))
 
 app = Client("hardsub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_data = {}
 
-# --- Koyeb Health Check Endpoint ---
+# --- Koyeb HTTP Health Check Endpoint ---
 async def health_check(request):
-    return web.Response(text="Bot is healthy and running!", status=200)
+    return web.Response(text="OK", status=200)
 
 async def start_web_server():
     server = web.Application()
@@ -26,16 +28,16 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"✅ Health check server listening on port {PORT}")
+    print(f"✅ Health check web server running on port {PORT}")
 
-# --- Progress Callback for Pyrogram Transfers ---
+# --- Progress Callback for Downloads/Uploads ---
 def progress_bar(current, total, status, message, start_time):
     now = time.time()
     diff = now - start_time
     if diff == 0:
         return
     percentage = (current / total) * 100
-    speed = current / diff / (1024 * 1024)  # MB/s
+    speed = current / diff / (1024 * 1024)
     
     if not hasattr(progress_bar, "last_update"):
         progress_bar.last_update = 0
@@ -51,7 +53,7 @@ def progress_bar(current, total, status, message, start_time):
         except Exception:
             pass
 
-# --- Helper function to retrieve video length for FFmpeg progress calculation ---
+# --- Extract Video Duration via FFprobe ---
 async def get_video_duration(file_path: str) -> float:
     cmd = [
         "ffprobe", "-v", "error",
@@ -60,7 +62,7 @@ async def get_video_duration(file_path: str) -> float:
         file_path
     ]
     process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
     )
     stdout, _ = await process.communicate()
     try:
@@ -68,13 +70,12 @@ async def get_video_duration(file_path: str) -> float:
     except ValueError:
         return 0.0
 
-# --- Bot Commands ---
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
     await message.reply_text(
         "👋 **Fast Hardsub Bot Ready!**\n\n"
         "1. Send me a **Video File** (up to 2GB).\n"
-        "2. Send me a **Subtitle File** (`.srt`, `.ass`, or `.vtt`).\n"
+        "2. Send me a **Subtitle File** (`.srt`, `.ass`, `.vtt`).\n"
         "3. Select `/convert x264` or `/convert x265` to burn subtitles."
     )
 
@@ -87,7 +88,7 @@ async def handle_media(client: Client, message: Message):
 
     file_name = doc.file_name or "file.mp4"
     
-    # Handle Subtitle Files (.srt, .ass, .vtt)
+    # Handle Subtitle Files
     if file_name.lower().endswith((".srt", ".ass", ".vtt")):
         if user_id not in user_data or "video" not in user_data[user_id]:
             await message.reply_text("❌ Please send the video file first!")
@@ -101,8 +102,8 @@ async def handle_media(client: Client, message: Message):
         await status_msg.edit_text(
             "⚙️ **Subtitle Received!**\n"
             "Select target codec to start burning:\n"
-            "• `/convert x264` (Fastest, maximum compatibility)\n"
-            "• `/convert x265` (High compression, smaller file size)"
+            "• `/convert x264` (Fast encoding)\n"
+            "• `/convert x265` (High compression)"
         )
     # Handle Video Files
     else:
@@ -114,14 +115,14 @@ async def handle_media(client: Client, message: Message):
             progress_args=("Downloading Video...", status_msg, start_time)
         )
         user_data[user_id] = {"video": video_path}
-        await status_msg.edit_text("✅ Video downloaded! Now send the subtitle file (`.srt` or `.ass`).")
+        await status_msg.edit_text("✅ Video downloaded! Now send the subtitle file.")
 
 @app.on_message(filters.command("convert"))
 async def process_hardsub(client: Client, message: Message):
     user_id = message.from_user.id
     
     if user_id not in user_data or "video" not in user_data[user_id] or "sub" not in user_data[user_id]:
-        await message.reply_text("❌ Missing video or subtitle file. Send both first.")
+        await message.reply_text("❌ Missing video or subtitle file. Upload both first.")
         return
 
     args = message.text.split(" ")
@@ -137,7 +138,7 @@ async def process_hardsub(client: Client, message: Message):
 
     total_duration = await get_video_duration(video_file)
 
-    # Safely escape backslashes, colons, and single quotes for Linux/Windows FFmpeg path processing
+    # Path escaping for subtitles
     escaped_sub_file = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
     ffmpeg_cmd = [
@@ -157,15 +158,15 @@ async def process_hardsub(client: Client, message: Message):
 
     status_msg = await message.reply_text("⚙️ **Starting Hardsub Process...**")
     
+    # DEVNULL on stderr prevents process freezing due to pipe overflow
     process = await asyncio.create_subprocess_exec(
         *ffmpeg_cmd,
         stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+        stderr=asyncio.subprocess.DEVNULL
     )
 
     last_edit = time.time()
 
-    # Read FFmpeg pipe live for accurate % hardsubbing progress
     while True:
         line = await process.stdout.readline()
         if not line:
@@ -179,7 +180,6 @@ async def process_hardsub(client: Client, message: Message):
                 current_secs = time_ms / 1_000_000
                 percent = min((current_secs / total_duration) * 100, 100.0)
                 
-                # Edit status every 5 seconds to comply with Telegram rate limits
                 if time.time() - last_edit > 5:
                     last_edit = time.time()
                     await status_msg.edit_text(
@@ -193,7 +193,7 @@ async def process_hardsub(client: Client, message: Message):
     await process.wait()
 
     if not os.path.exists(output_file):
-        await status_msg.edit_text("❌ Subtitle burn failed. Verify subtitle file format.")
+        await status_msg.edit_text("❌ Encoding failed. Verify subtitle file format.")
         return
 
     await status_msg.edit_text("📤 Uploading hardsubbed video...")
@@ -207,7 +207,7 @@ async def process_hardsub(client: Client, message: Message):
         progress_args=("Uploading Video...", status_msg, start_time)
     )
 
-    # Clean up temporary local files
+    # Cleanup temporary local files
     for path in [video_file, sub_file, output_file]:
         if os.path.exists(path):
             os.remove(path)
@@ -216,7 +216,7 @@ async def process_hardsub(client: Client, message: Message):
 async def main():
     await start_web_server()
     await app.start()
-    print("🚀 Bot started successfully with health check!")
+    print("🚀 Bot started successfully!")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
