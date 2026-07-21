@@ -5,18 +5,16 @@ from aiohttp import web
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Hardcoded Telegram API Credentials & Token
+# Credentials
 API_ID = 36282056 
 API_HASH = "3a948acece533f362b4c90b2b3c14b60"
 BOT_TOKEN = "8737705568:AAGSjZlCgT6yrs6h045X88EEq63-iZLCiD4"
-
-# Set default port to 8000 to match Koyeb's health check configuration
 PORT = int(os.getenv("PORT", "8000"))
 
 app = Client("hardsub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_data = {}
 
-# --- Koyeb HTTP Health Check Endpoint ---
+# --- Health Check Web Server ---
 async def health_check(request):
     return web.Response(text="OK", status=200)
 
@@ -28,9 +26,26 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"✅ Health check web server running on port {PORT}")
+    print(f"✅ Web server listening on port {PORT}")
 
-# --- Progress Callback for Downloads/Uploads ---
+# --- Helper: Video Duration ---
+async def get_video_duration(file_path: str) -> float:
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        file_path
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+    )
+    stdout, _ = await process.communicate()
+    try:
+        return float(stdout.decode().strip())
+    except ValueError:
+        return 0.0
+
+# --- Progress Callback ---
 def progress_bar(current, total, status, message, start_time):
     now = time.time()
     diff = now - start_time
@@ -53,30 +68,14 @@ def progress_bar(current, total, status, message, start_time):
         except Exception:
             pass
 
-# --- Extract Video Duration via FFprobe ---
-async def get_video_duration(file_path: str) -> float:
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
-    )
-    stdout, _ = await process.communicate()
-    try:
-        return float(stdout.decode().strip())
-    except ValueError:
-        return 0.0
-
+# --- Bot Commands ---
 @app.on_message(filters.command("start"))
 async def start(client: Client, message: Message):
     await message.reply_text(
         "👋 **Fast Hardsub Bot Ready!**\n\n"
         "1. Send me a **Video File** (up to 2GB).\n"
         "2. Send me a **Subtitle File** (`.srt`, `.ass`, `.vtt`).\n"
-        "3. Select `/convert x264` or `/convert x265` to burn subtitles."
+        "3. Select `/convert x264` or `/convert x265`."
     )
 
 @app.on_message(filters.video | filters.document)
@@ -88,7 +87,6 @@ async def handle_media(client: Client, message: Message):
 
     file_name = doc.file_name or "file.mp4"
     
-    # Handle Subtitle Files
     if file_name.lower().endswith((".srt", ".ass", ".vtt")):
         if user_id not in user_data or "video" not in user_data[user_id]:
             await message.reply_text("❌ Please send the video file first!")
@@ -101,11 +99,10 @@ async def handle_media(client: Client, message: Message):
         
         await status_msg.edit_text(
             "⚙️ **Subtitle Received!**\n"
-            "Select target codec to start burning:\n"
-            "• `/convert x264` (Fast encoding)\n"
-            "• `/convert x265` (High compression)"
+            "Select target codec:\n"
+            "• `/convert x264`\n"
+            "• `/convert x265`"
         )
-    # Handle Video Files
     else:
         status_msg = await message.reply_text("📥 Downloading video file...")
         start_time = time.time()
@@ -122,7 +119,7 @@ async def process_hardsub(client: Client, message: Message):
     user_id = message.from_user.id
     
     if user_id not in user_data or "video" not in user_data[user_id] or "sub" not in user_data[user_id]:
-        await message.reply_text("❌ Missing video or subtitle file. Upload both first.")
+        await message.reply_text("❌ Missing video or subtitle file.")
         return
 
     args = message.text.split(" ")
@@ -137,8 +134,6 @@ async def process_hardsub(client: Client, message: Message):
     encoder = "libx264" if codec_choice == "x264" else "libx265"
 
     total_duration = await get_video_duration(video_file)
-
-    # Path escaping for subtitles
     escaped_sub_file = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
     ffmpeg_cmd = [
@@ -158,7 +153,6 @@ async def process_hardsub(client: Client, message: Message):
 
     status_msg = await message.reply_text("⚙️ **Starting Hardsub Process...**")
     
-    # DEVNULL on stderr prevents process freezing due to pipe overflow
     process = await asyncio.create_subprocess_exec(
         *ffmpeg_cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -193,7 +187,7 @@ async def process_hardsub(client: Client, message: Message):
     await process.wait()
 
     if not os.path.exists(output_file):
-        await status_msg.edit_text("❌ Encoding failed. Verify subtitle file format.")
+        await status_msg.edit_text("❌ Subtitle burn failed.")
         return
 
     await status_msg.edit_text("📤 Uploading hardsubbed video...")
@@ -201,23 +195,20 @@ async def process_hardsub(client: Client, message: Message):
     
     await message.reply_video(
         video=output_file,
-        caption=f"✅ **Subtitles Burned Successfully!**\nCodec: `{codec_choice}`",
+        caption=f"✅ **Hardsub Complete!**\nCodec: `{codec_choice}`",
         supports_streaming=True,
         progress=progress_bar,
         progress_args=("Uploading Video...", status_msg, start_time)
     )
 
-    # Cleanup temporary local files
     for path in [video_file, sub_file, output_file]:
         if os.path.exists(path):
             os.remove(path)
     del user_data[user_id]
 
-async def main():
-    await start_web_server()
-    await app.start()
-    print("🚀 Bot started successfully!")
-    await asyncio.Event().wait()
-
+# --- Correct Startup Procedure ---
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_web_server())
+    print("🚀 Web server started! Now launching Pyrogram...")
+    app.run()
