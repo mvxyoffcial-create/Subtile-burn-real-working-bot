@@ -5,7 +5,7 @@ from aiohttp import web
 from pyrogram import Client, filters
 from pyrogram.types import Message
 
-# Credentials (Consider moving these to environment variables!)
+# Credentials (Consider moving these to environment variables for security)
 API_ID = 36282056
 API_HASH = "3a948acece533f362b4c90b2b3c14b60"
 BOT_TOKEN = "8737705568:AAGSjZlCgT6yrs6h045X88EEq63-iZLCiD4"
@@ -136,11 +136,19 @@ async def process_hardsub(client: Client, message: Message):
     total_duration = await get_video_duration(video_file)
     escaped_sub_file = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
 
-    # Custom subtitle style to match the screenshot (White text, black outline, crisp shadow)
+    # Updated Subtitle Style: Pure White text with crisp Black Outline and Shadow
     sub_style = (
-        "Fontname=Arial,FontSize=18,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=1,"
-        "Outline=1.5,Shadow=1,Alignment=2,MarginV=25"
+        "Fontname=Arial,"
+        "FontSize=20,"
+        "PrimaryColour=&HFFFFFF,"
+        "SecondaryColour=&HFFFFFF,"
+        "OutlineColour=&H000000,"
+        "BackColour=&H000000,"
+        "BorderStyle=1,"
+        "Outline=2,"
+        "Shadow=1,"
+        "Alignment=2,"
+        "MarginV=30"
     )
 
     ffmpeg_cmd = [
