@@ -73,9 +73,10 @@ def progress_bar(current, total, status, message, start_time):
 async def start(client: Client, message: Message):
     await message.reply_text(
         "👋 **Fast Hardsub Bot Ready!**\n\n"
-        "1. Send me a **Video File** (up to 2GB).\n"
+        "1. Send me a **Video File** (unlimited size).\n"
         "2. Send me a **Subtitle File** (`.srt`, `.ass`, `.vtt`).\n"
-        "3. Select `/convert x264` or `/convert x265`."
+        "3. Select `/convert x264` or `/convert x265`.\n\n"
+        "⚡ **Ultra-fast processing** with crystal-clear subtitles!"
     )
 
 @app.on_message(filters.video | filters.document)
@@ -131,19 +132,33 @@ async def process_hardsub(client: Client, message: Message):
     video_file = user_data[user_id]["video"]
     sub_file = user_data[user_id]["sub"]
     output_file = f"out_{user_id}.mp4"
-    encoder = "libx264" if codec_choice == "x264" else "libx265"
+    
+    # Codec selection with optimal settings for speed
+    if codec_choice == "x265":
+        encoder = "libx265"
+        video_args = ["-c:v", encoder, "-preset", "ultrafast", "-x265-params", "log-level=error", "-crf", "22"]
+    else:
+        encoder = "libx264"
+        video_args = ["-c:v", encoder, "-preset", "ultrafast", "-crf", "21"]
 
     total_duration = await get_video_duration(video_file)
+    
+    # Escape subtitle path for FFmpeg
     escaped_sub_file = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+    
+    # Enhanced subtitle filter for CRYSTAL CLEAR rendering (like screenshot)
+    subtitle_filter = (
+        f"subtitles={escaped_sub_file}:"
+        f"force_style='FontName=Arial,FontSize=24,PrimaryColour=&HFFFFFF,OutlineColour=&H000000,BorderStyle=3,Outline=2,Shadow=1,Alignment=2'"
+    )
 
     ffmpeg_cmd = [
         "ffmpeg", "-y",
         "-i", video_file,
-        "-vf", f"subtitles={escaped_sub_file}",
-        "-c:v", encoder,
-        "-preset", "ultrafast",
-        "-crf", "23",
-        "-c:a", "copy",
+        "-vf", subtitle_filter,
+        *video_args,
+        "-c:a", "aac",
+        "-b:a", "128k",
         "-threads", "0",
         "-movflags", "+faststart",
         "-progress", "pipe:1",
@@ -151,7 +166,7 @@ async def process_hardsub(client: Client, message: Message):
         output_file
     ]
 
-    status_msg = await message.reply_text("⚙️ **Starting Hardsub Process...**")
+    status_msg = await message.reply_text("⚙️ **Starting Hardsub Process...**\n🔥 Ultra-fast encoding with crystal-clear subtitles...")
     
     process = await asyncio.create_subprocess_exec(
         *ffmpeg_cmd,
@@ -160,6 +175,7 @@ async def process_hardsub(client: Client, message: Message):
     )
 
     last_edit = time.time()
+    start_encode = time.time()
 
     while True:
         line = await process.stdout.readline()
@@ -174,12 +190,14 @@ async def process_hardsub(client: Client, message: Message):
                 current_secs = time_ms / 1_000_000
                 percent = min((current_secs / total_duration) * 100, 100.0)
                 
-                if time.time() - last_edit > 5:
+                if time.time() - last_edit > 3:
                     last_edit = time.time()
+                    elapsed = time.time() - start_encode
                     await status_msg.edit_text(
                         f"🔥 **Hardsubbing Video...**\n"
                         f"Progress: `{percent:.1f}%`\n"
-                        f"Codec: `{codec_choice}`"
+                        f"Codec: `{codec_choice.upper()}`\n"
+                        f"Time: `{int(elapsed)}s`"
                     )
             except Exception:
                 pass
@@ -187,24 +205,31 @@ async def process_hardsub(client: Client, message: Message):
     await process.wait()
 
     if not os.path.exists(output_file):
-        await status_msg.edit_text("❌ Subtitle burn failed.")
+        await status_msg.edit_text("❌ Subtitle burn failed. Please try again.")
         return
 
-    await status_msg.edit_text("📤 Uploading hardsubbed video...")
+    file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+    await status_msg.edit_text(f"📤 Uploading hardsubbed video ({file_size_mb:.1f}MB)...")
     start_time = time.time()
     
     await message.reply_video(
         video=output_file,
-        caption=f"✅ **Hardsub Complete!**\nCodec: `{codec_choice}`",
+        caption=f"✅ **Hardsub Complete!**\n📊 Codec: `{codec_choice.upper()}`\n💾 Size: `{file_size_mb:.1f}MB`",
         supports_streaming=True,
         progress=progress_bar,
         progress_args=("Uploading Video...", status_msg, start_time)
     )
 
+    # Cleanup
     for path in [video_file, sub_file, output_file]:
-        if os.path.exists(path):
-            os.remove(path)
-    del user_data[user_id]
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception:
+            pass
+    
+    if user_id in user_data:
+        del user_data[user_id]
 
 # --- Correct Startup Procedure ---
 if __name__ == "__main__":
