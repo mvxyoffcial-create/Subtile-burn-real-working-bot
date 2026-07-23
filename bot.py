@@ -8,7 +8,7 @@ from pyrogram.types import Message
 # Credentials (Consider moving these to environment variables for security)
 API_ID = 36282056
 API_HASH = "3a948acece533f362b4c90b2b3c14b60"
-BOT_TOKEN = "8737705568:AAGSjZlCgT6yrs6h045X88EEq63-iZLCiD4"
+BOT_TOKEN = "8638900175:AAHVl95mRb8Rjmut9CwnXHpERSIQh11xpVQ"
 PORT = int(os.getenv("PORT", "8000"))
 
 app = Client("hardsub_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
